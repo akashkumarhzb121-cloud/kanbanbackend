@@ -1,6 +1,3 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -19,7 +16,6 @@ const connectDB = async () => {
   if (isConnected) return;
   await mongoose.connect(process.env.MONGO_URI, { dbName: 'task_manager_app' });
   isConnected = true;
-  console.log('✅ MongoDB connected');
 };
 
 // ─── MODELS ───────────────────────────────────────────────────────────────────
@@ -53,8 +49,8 @@ const Task = mongoose.models.Task || mongoose.model('Task', taskSchema);
 
 // ─── UTILS ────────────────────────────────────────────────────────────────────
 
-const generateToken = (userId, expiresIn = '7d') =>
-  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn });
+const generateToken = (userId) =>
+  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
 
 const sanitizeUser = (user) => ({
   id: user._id,
@@ -93,32 +89,11 @@ const protect = async (req, res, next) => {
   }
 };
 
-const notFound = (req, res, next) => {
-  const error = new Error(`Not Found - ${req.originalUrl}`);
-  res.status(404);
-  next(error);
-};
-
-const errorHandler = (err, req, res, _next) => {
-  const statusCode = res.statusCode !== 200 ? res.statusCode : 500;
-  res.status(statusCode).json({
-    message: err.message,
-    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
-  });
-};
-
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 const app = express();
 
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:5173',
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+app.use(cors({ origin: '*', credentials: true }));
 app.options('*', cors());
 app.use(helmet());
 app.use(morgan('dev'));
@@ -135,26 +110,30 @@ app.use(async (_req, _res, next) => {
   }
 });
 
-// ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
+// ─── HEALTH ───────────────────────────────────────────────────────────────────
 
 app.get('/api/health', (_req, res) => res.status(200).json({ message: 'Server is running' }));
+
+// ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
 
 app.post(
   '/api/auth/signup',
   [
     body('name').trim().notEmpty().withMessage('Name is required').isLength({ min: 2 }),
     body('email').isEmail().withMessage('Valid email is required').toLowerCase(),
-    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters long'),
+    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
   ],
   validate,
-  async (req, res) => {
-    const { name, email, password } = req.body;
-    const existing = await User.findOne({ email });
-    if (existing) return res.status(409).json({ message: 'Email already in use.' });
-    const hashed = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email, password: hashed });
-    const token = generateToken(user._id, process.env.JWT_EXPIRES_IN);
-    res.status(201).json({ message: 'Signup successful', token, user: sanitizeUser(user) });
+  async (req, res, next) => {
+    try {
+      const { name, email, password } = req.body;
+      const existing = await User.findOne({ email });
+      if (existing) return res.status(409).json({ message: 'Email already in use.' });
+      const hashed = await bcrypt.hash(password, 12);
+      const user = await User.create({ name, email, password: hashed });
+      const token = generateToken(user._id);
+      res.status(201).json({ message: 'Signup successful', token, user: sanitizeUser(user) });
+    } catch (err) { next(err); }
   }
 );
 
@@ -165,14 +144,16 @@ app.post(
     body('password').notEmpty().withMessage('Password is required'),
   ],
   validate,
-  async (req, res) => {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: 'Invalid email or password.' });
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ message: 'Invalid email or password.' });
-    const token = generateToken(user._id, process.env.JWT_EXPIRES_IN);
-    res.status(200).json({ message: 'Login successful', token, user: sanitizeUser(user) });
+  async (req, res, next) => {
+    try {
+      const { email, password } = req.body;
+      const user = await User.findOne({ email });
+      if (!user) return res.status(401).json({ message: 'Invalid email or password.' });
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) return res.status(401).json({ message: 'Invalid email or password.' });
+      const token = generateToken(user._id);
+      res.status(200).json({ message: 'Login successful', token, user: sanitizeUser(user) });
+    } catch (err) { next(err); }
   }
 );
 
@@ -198,23 +179,25 @@ app.get(
     query('priority').optional().isIn(['Low', 'Medium', 'High']),
   ],
   validate,
-  async (req, res) => {
-    const { status, priority, search = '', sort = '-createdAt' } = req.query;
-    const filter = { user: req.user._id };
-    if (status) filter.status = status;
-    if (priority) filter.priority = priority;
-    if (search) filter.$or = [
-      { title: { $regex: search, $options: 'i' } },
-      { description: { $regex: search, $options: 'i' } },
-    ];
-    const tasks = await Task.find(filter).sort(sort);
-    const stats = {
-      total: tasks.length,
-      completed: tasks.filter((t) => t.status === 'Completed').length,
-      pending: tasks.filter((t) => t.status === 'Pending').length,
-      inProgress: tasks.filter((t) => t.status === 'In Progress').length,
-    };
-    res.status(200).json({ tasks, stats });
+  async (req, res, next) => {
+    try {
+      const { status, priority, search = '', sort = '-createdAt' } = req.query;
+      const filter = { user: req.user._id };
+      if (status) filter.status = status;
+      if (priority) filter.priority = priority;
+      if (search) filter.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+      ];
+      const tasks = await Task.find(filter).sort(sort);
+      const stats = {
+        total: tasks.length,
+        completed: tasks.filter((t) => t.status === 'Completed').length,
+        pending: tasks.filter((t) => t.status === 'Pending').length,
+        inProgress: tasks.filter((t) => t.status === 'In Progress').length,
+      };
+      res.status(200).json({ tasks, stats });
+    } catch (err) { next(err); }
   }
 );
 
@@ -223,9 +206,11 @@ app.post(
   protect,
   [body('title').trim().notEmpty().withMessage('Title is required'), ...taskValidation],
   validate,
-  async (req, res) => {
-    const task = await Task.create({ ...req.body, user: req.user._id });
-    res.status(201).json({ message: 'Task created', task });
+  async (req, res, next) => {
+    try {
+      const task = await Task.create({ ...req.body, user: req.user._id });
+      res.status(201).json({ message: 'Task created', task });
+    } catch (err) { next(err); }
   }
 );
 
@@ -234,10 +219,12 @@ app.get(
   protect,
   [param('id').isMongoId().withMessage('Invalid task id')],
   validate,
-  async (req, res) => {
-    const task = await Task.findOne({ _id: req.params.id, user: req.user._id });
-    if (!task) return res.status(404).json({ message: 'Task not found' });
-    res.status(200).json({ task });
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOne({ _id: req.params.id, user: req.user._id });
+      if (!task) return res.status(404).json({ message: 'Task not found' });
+      res.status(200).json({ task });
+    } catch (err) { next(err); }
   }
 );
 
@@ -246,14 +233,16 @@ app.put(
   protect,
   [param('id').isMongoId().withMessage('Invalid task id'), ...taskValidation],
   validate,
-  async (req, res) => {
-    const task = await Task.findOneAndUpdate(
-      { _id: req.params.id, user: req.user._id },
-      req.body,
-      { new: true, runValidators: true }
-    );
-    if (!task) return res.status(404).json({ message: 'Task not found' });
-    res.status(200).json({ message: 'Task updated', task });
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOneAndUpdate(
+        { _id: req.params.id, user: req.user._id },
+        req.body,
+        { new: true, runValidators: true }
+      );
+      if (!task) return res.status(404).json({ message: 'Task not found' });
+      res.status(200).json({ message: 'Task updated', task });
+    } catch (err) { next(err); }
   }
 );
 
@@ -262,14 +251,23 @@ app.delete(
   protect,
   [param('id').isMongoId().withMessage('Invalid task id')],
   validate,
-  async (req, res) => {
-    const task = await Task.findOneAndDelete({ _id: req.params.id, user: req.user._id });
-    if (!task) return res.status(404).json({ message: 'Task not found' });
-    res.status(200).json({ message: 'Task deleted' });
+  async (req, res, next) => {
+    try {
+      const task = await Task.findOneAndDelete({ _id: req.params.id, user: req.user._id });
+      if (!task) return res.status(404).json({ message: 'Task not found' });
+      res.status(200).json({ message: 'Task deleted' });
+    } catch (err) { next(err); }
   }
 );
 
-app.use(notFound);
-app.use(errorHandler);
+// ─── ERROR HANDLER ────────────────────────────────────────────────────────────
+
+app.use((err, _req, res, _next) => {
+  const statusCode = res.statusCode !== 200 ? res.statusCode : 500;
+  res.status(statusCode).json({
+    message: err.message,
+    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
+  });
+});
 
 export default app;
