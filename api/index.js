@@ -8,49 +8,124 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { body, param, query, validationResult } from 'express-validator';
 
-// ─── DB ───────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// CONFIG
+// ─────────────────────────────────────────────────────────────
 
-let isConnected = false;
+const MONGO_URI =
+  'mongodb+srv://akashkumarhzb121_db_user:<akash123>@kanbanbackend.uueuwje.mongodb.net/';
+
+const JWT_SECRET = 'akash123';
+
+// ─────────────────────────────────────────────────────────────
+// DB CONNECTION
+// ─────────────────────────────────────────────────────────────
 
 const connectDB = async () => {
-  if (isConnected) return;
-  await mongoose.connect(process.env.MONGO_URI, { dbName: 'task_manager_app' });
-  isConnected = true;
+  try {
+    if (mongoose.connections[0].readyState) {
+      console.log('MongoDB already connected');
+      return;
+    }
+
+    await mongoose.connect(MONGO_URI, {
+      dbName: 'task_manager_app',
+    });
+
+    console.log('MongoDB Connected');
+  } catch (error) {
+    console.error('MongoDB Connection Error:', error);
+    process.exit(1);
+  }
 };
 
-// ─── MODELS ───────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// MODELS
+// ─────────────────────────────────────────────────────────────
 
 const userSchema = new mongoose.Schema(
   {
-    name:     { type: String, required: true, trim: true, minlength: 2, maxlength: 50 },
-    email:    { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true, minlength: 8 },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+      minlength: 2,
+      maxlength: 50,
+    },
+    email: {
+      type: String,
+      required: true,
+      unique: true,
+      lowercase: true,
+      trim: true,
+    },
+    password: {
+      type: String,
+      required: true,
+      minlength: 8,
+    },
   },
   { timestamps: true }
 );
 
-const User = mongoose.models.User || mongoose.model('User', userSchema);
+const User =
+  mongoose.models.User || mongoose.model('User', userSchema);
 
 const taskSchema = new mongoose.Schema(
   {
-    user:        { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
-    title:       { type: String, required: true, trim: true, maxlength: 140 },
-    description: { type: String, default: '', trim: true, maxlength: 2000 },
-    status:      { type: String, enum: ['Pending', 'In Progress', 'Completed'], default: 'Pending', index: true },
-    priority:    { type: String, enum: ['Low', 'Medium', 'High'], default: 'Medium', index: true },
-    dueDate:     { type: Date },
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+
+    title: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 140,
+    },
+
+    description: {
+      type: String,
+      default: '',
+      trim: true,
+      maxlength: 2000,
+    },
+
+    status: {
+      type: String,
+      enum: ['Pending', 'In Progress', 'Completed'],
+      default: 'Pending',
+    },
+
+    priority: {
+      type: String,
+      enum: ['Low', 'Medium', 'High'],
+      default: 'Medium',
+    },
+
+    dueDate: {
+      type: Date,
+    },
   },
   { timestamps: true }
 );
 
 taskSchema.index({ title: 'text', description: 'text' });
 
-const Task = mongoose.models.Task || mongoose.model('Task', taskSchema);
+const Task =
+  mongoose.models.Task || mongoose.model('Task', taskSchema);
 
-// ─── UTILS ────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// UTILS
+// ─────────────────────────────────────────────────────────────
 
-const generateToken = (userId) =>
-  jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+const generateToken = (userId) => {
+  return jwt.sign({ userId }, JWT_SECRET, {
+    expiresIn: '7d',
+  });
+};
 
 const sanitizeUser = (user) => ({
   id: user._id,
@@ -59,215 +134,450 @@ const sanitizeUser = (user) => ({
   createdAt: user.createdAt,
 });
 
-// ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// VALIDATION MIDDLEWARE
+// ─────────────────────────────────────────────────────────────
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
+
   if (!errors.isEmpty()) {
     return res.status(400).json({
-      message: 'Validation failed',
-      errors: errors.array().map((e) => ({ field: e.path, message: e.msg })),
+      success: false,
+      errors: errors.array(),
     });
   }
+
   next();
 };
 
+// ─────────────────────────────────────────────────────────────
+// AUTH MIDDLEWARE
+// ─────────────────────────────────────────────────────────────
+
 const protect = async (req, res, next) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
-    return res.status(401).json({ message: 'Not authorized. Missing token.' });
-  }
   try {
+    const authHeader = req.headers.authorization;
+
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({
+        message: 'Unauthorized. No token.',
+      });
+    }
+
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findById(decoded.userId).select('-password');
-    if (!user) return res.status(401).json({ message: 'Not authorized. User not found.' });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    const user = await User.findById(decoded.userId).select(
+      '-password'
+    );
+
+    if (!user) {
+      return res.status(401).json({
+        message: 'User not found',
+      });
+    }
+
     req.user = user;
+
     next();
-  } catch {
-    return res.status(401).json({ message: 'Not authorized. Invalid token.' });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(401).json({
+      message: 'Invalid token',
+    });
   }
 };
 
-// ─── APP ──────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// APP
+// ─────────────────────────────────────────────────────────────
 
 const app = express();
 
-app.use(cors({ origin: '*', credentials: true }));
-app.options('*', cors());
+// Connect DB
+connectDB();
+
+// Middlewares
+app.use(cors());
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
 app.use(cookieParser());
 
-// Connect DB before every request (cached after first call)
-app.use(async (_req, _res, next) => {
-  try {
-    await connectDB();
-    next();
-  } catch (err) {
-    next(err);
-  }
+// ─────────────────────────────────────────────────────────────
+// ROOT ROUTE
+// ─────────────────────────────────────────────────────────────
+
+app.get('/', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Kanban Backend Running Successfully',
+  });
 });
 
-// ─── HEALTH ───────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// HEALTH ROUTE
+// ─────────────────────────────────────────────────────────────
 
-app.get('/api/health', (_req, res) => res.status(200).json({ message: 'Server is running' }));
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is healthy',
+  });
+});
 
-// ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// AUTH ROUTES
+// ─────────────────────────────────────────────────────────────
 
 app.post(
   '/api/auth/signup',
   [
-    body('name').trim().notEmpty().withMessage('Name is required').isLength({ min: 2 }),
-    body('email').isEmail().withMessage('Valid email is required').toLowerCase(),
-    body('password').isLength({ min: 8 }).withMessage('Password must be at least 8 characters'),
+    body('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Name required'),
+
+    body('email')
+      .isEmail()
+      .withMessage('Valid email required'),
+
+    body('password')
+      .isLength({ min: 8 })
+      .withMessage('Password min 8 chars'),
   ],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
       const { name, email, password } = req.body;
-      const existing = await User.findOne({ email });
-      if (existing) return res.status(409).json({ message: 'Email already in use.' });
-      const hashed = await bcrypt.hash(password, 12);
-      const user = await User.create({ name, email, password: hashed });
+
+      const existingUser = await User.findOne({ email });
+
+      if (existingUser) {
+        return res.status(409).json({
+          message: 'Email already exists',
+        });
+      }
+
+      const hashedPassword = await bcrypt.hash(password, 12);
+
+      const user = await User.create({
+        name,
+        email,
+        password: hashedPassword,
+      });
+
       const token = generateToken(user._id);
-      res.status(201).json({ message: 'Signup successful', token, user: sanitizeUser(user) });
-    } catch (err) { next(err); }
+
+      res.status(201).json({
+        success: true,
+        message: 'Signup successful',
+        token,
+        user: sanitizeUser(user),
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
 
 app.post(
   '/api/auth/login',
   [
-    body('email').isEmail().withMessage('Valid email is required').toLowerCase(),
-    body('password').notEmpty().withMessage('Password is required'),
+    body('email').isEmail(),
+
+    body('password').notEmpty(),
   ],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
       const { email, password } = req.body;
+
       const user = await User.findOne({ email });
-      if (!user) return res.status(401).json({ message: 'Invalid email or password.' });
-      const isMatch = await bcrypt.compare(password, user.password);
-      if (!isMatch) return res.status(401).json({ message: 'Invalid email or password.' });
+
+      if (!user) {
+        return res.status(401).json({
+          message: 'Invalid credentials',
+        });
+      }
+
+      const isMatch = await bcrypt.compare(
+        password,
+        user.password
+      );
+
+      if (!isMatch) {
+        return res.status(401).json({
+          message: 'Invalid credentials',
+        });
+      }
+
       const token = generateToken(user._id);
-      res.status(200).json({ message: 'Login successful', token, user: sanitizeUser(user) });
-    } catch (err) { next(err); }
+
+      res.status(200).json({
+        success: true,
+        message: 'Login successful',
+        token,
+        user: sanitizeUser(user),
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
 
-app.get('/api/auth/me', protect, (req, res) => {
-  res.status(200).json({ user: req.user });
+// ─────────────────────────────────────────────────────────────
+// GET CURRENT USER
+// ─────────────────────────────────────────────────────────────
+
+app.get('/api/auth/me', protect, async (req, res) => {
+  res.status(200).json({
+    success: true,
+    user: req.user,
+  });
 });
 
-// ─── TASK ROUTES ──────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// TASK VALIDATION
+// ─────────────────────────────────────────────────────────────
 
 const taskValidation = [
-  body('title').optional().trim().notEmpty().withMessage('Title cannot be empty').isLength({ max: 140 }),
-  body('description').optional().trim().isLength({ max: 2000 }),
-  body('status').optional().isIn(['Pending', 'In Progress', 'Completed']),
-  body('priority').optional().isIn(['Low', 'Medium', 'High']),
-  body('dueDate').optional().isISO8601().withMessage('Invalid due date'),
+  body('title').optional().trim().notEmpty(),
+
+  body('status')
+    .optional()
+    .isIn(['Pending', 'In Progress', 'Completed']),
+
+  body('priority')
+    .optional()
+    .isIn(['Low', 'Medium', 'High']),
 ];
+
+// ─────────────────────────────────────────────────────────────
+// GET TASKS
+// ─────────────────────────────────────────────────────────────
 
 app.get(
   '/api/tasks',
   protect,
   [
-    query('status').optional().isIn(['Pending', 'In Progress', 'Completed']),
-    query('priority').optional().isIn(['Low', 'Medium', 'High']),
+    query('status')
+      .optional()
+      .isIn(['Pending', 'In Progress', 'Completed']),
+
+    query('priority')
+      .optional()
+      .isIn(['Low', 'Medium', 'High']),
   ],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
-      const { status, priority, search = '', sort = '-createdAt' } = req.query;
-      const filter = { user: req.user._id };
-      if (status) filter.status = status;
-      if (priority) filter.priority = priority;
-      if (search) filter.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-      ];
-      const tasks = await Task.find(filter).sort(sort);
-      const stats = {
-        total: tasks.length,
-        completed: tasks.filter((t) => t.status === 'Completed').length,
-        pending: tasks.filter((t) => t.status === 'Pending').length,
-        inProgress: tasks.filter((t) => t.status === 'In Progress').length,
+      const { status, priority, search = '' } = req.query;
+
+      const filter = {
+        user: req.user._id,
       };
-      res.status(200).json({ tasks, stats });
-    } catch (err) { next(err); }
+
+      if (status) filter.status = status;
+
+      if (priority) filter.priority = priority;
+
+      if (search) {
+        filter.$or = [
+          {
+            title: {
+              $regex: search,
+              $options: 'i',
+            },
+          },
+          {
+            description: {
+              $regex: search,
+              $options: 'i',
+            },
+          },
+        ];
+      }
+
+      const tasks = await Task.find(filter).sort({
+        createdAt: -1,
+      });
+
+      res.status(200).json({
+        success: true,
+        tasks,
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
+
+// ─────────────────────────────────────────────────────────────
+// CREATE TASK
+// ─────────────────────────────────────────────────────────────
 
 app.post(
   '/api/tasks',
   protect,
-  [body('title').trim().notEmpty().withMessage('Title is required'), ...taskValidation],
+  [
+    body('title')
+      .trim()
+      .notEmpty()
+      .withMessage('Title required'),
+
+    ...taskValidation,
+  ],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
-      const task = await Task.create({ ...req.body, user: req.user._id });
-      res.status(201).json({ message: 'Task created', task });
-    } catch (err) { next(err); }
+      const task = await Task.create({
+        ...req.body,
+        user: req.user._id,
+      });
+
+      res.status(201).json({
+        success: true,
+        message: 'Task created',
+        task,
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
 
-app.get(
-  '/api/tasks/:id',
-  protect,
-  [param('id').isMongoId().withMessage('Invalid task id')],
-  validate,
-  async (req, res, next) => {
-    try {
-      const task = await Task.findOne({ _id: req.params.id, user: req.user._id });
-      if (!task) return res.status(404).json({ message: 'Task not found' });
-      res.status(200).json({ task });
-    } catch (err) { next(err); }
-  }
-);
+// ─────────────────────────────────────────────────────────────
+// UPDATE TASK
+// ─────────────────────────────────────────────────────────────
 
 app.put(
   '/api/tasks/:id',
   protect,
-  [param('id').isMongoId().withMessage('Invalid task id'), ...taskValidation],
+  [
+    param('id').isMongoId(),
+
+    ...taskValidation,
+  ],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
       const task = await Task.findOneAndUpdate(
-        { _id: req.params.id, user: req.user._id },
+        {
+          _id: req.params.id,
+          user: req.user._id,
+        },
         req.body,
-        { new: true, runValidators: true }
+        {
+          new: true,
+          runValidators: true,
+        }
       );
-      if (!task) return res.status(404).json({ message: 'Task not found' });
-      res.status(200).json({ message: 'Task updated', task });
-    } catch (err) { next(err); }
+
+      if (!task) {
+        return res.status(404).json({
+          message: 'Task not found',
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Task updated',
+        task,
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
+
+// ─────────────────────────────────────────────────────────────
+// DELETE TASK
+// ─────────────────────────────────────────────────────────────
 
 app.delete(
   '/api/tasks/:id',
   protect,
-  [param('id').isMongoId().withMessage('Invalid task id')],
+  [param('id').isMongoId()],
   validate,
-  async (req, res, next) => {
+
+  async (req, res) => {
     try {
-      const task = await Task.findOneAndDelete({ _id: req.params.id, user: req.user._id });
-      if (!task) return res.status(404).json({ message: 'Task not found' });
-      res.status(200).json({ message: 'Task deleted' });
-    } catch (err) { next(err); }
+      const task = await Task.findOneAndDelete({
+        _id: req.params.id,
+        user: req.user._id,
+      });
+
+      if (!task) {
+        return res.status(404).json({
+          message: 'Task not found',
+        });
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'Task deleted',
+      });
+    } catch (error) {
+      console.error(error);
+
+      res.status(500).json({
+        success: false,
+        message: error.message,
+      });
+    }
   }
 );
 
-// ─── ERROR HANDLER ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// ERROR HANDLER
+// ─────────────────────────────────────────────────────────────
 
-app.use((err, _req, res, _next) => {
-  const statusCode = res.statusCode !== 200 ? res.statusCode : 500;
-  res.status(statusCode).json({
+app.use((err, req, res, next) => {
+  console.error('SERVER ERROR:', err);
+
+  res.status(500).json({
+    success: false,
     message: err.message,
-    stack: process.env.NODE_ENV === 'production' ? undefined : err.stack,
+    stack: err.stack,
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+// EXPORT
+// ─────────────────────────────────────────────────────────────
 
 export default app;
