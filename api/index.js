@@ -205,11 +205,14 @@ app.use(
   cors({
     origin: [
       'http://localhost:5173',
-      // 'https://your-frontend.vercel.app',
+      'https://your-frontend.vercel.app',
     ],
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
     credentials: true,
   })
 );
+
+app.options('*', cors());
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
