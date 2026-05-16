@@ -123,7 +123,7 @@ const protect = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────────────────────
-// SHARED TASK FIELD VALIDATORS  (optional — used in PUT)
+// SHARED TASK FIELD VALIDATORS (optional — used in PUT)
 // ─────────────────────────────────────────────────────────────
 
 const optionalTaskValidation = [
@@ -152,15 +152,24 @@ const app = express();
 
 connectDB();
 
+// FIX: No trailing slash on Vercel origin — browsers send origin without slash
+// and CORS strict-match would fail if the stored value has one
 app.use(
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000','https://kanbann-sandy.vercel.app/'],
+    origin: [
+      'http://localhost:5173',
+      'http://localhost:3000',
+      'https://kanbann-sandy.vercel.app',
+    ],
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     credentials: true,
   })
 );
 
+// FIX: '/{*path}' instead of '*' — Express 5 / path-to-regexp v8 no longer
+// accepts bare '*' as a wildcard; this is the correct catch-all syntax
 app.options('/{*path}', cors());
+
 app.use(helmet());
 app.use(morgan('dev'));
 app.use(express.json());
