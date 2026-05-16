@@ -13,7 +13,7 @@ import { body, param, query, validationResult } from 'express-validator';
 // ─────────────────────────────────────────────────────────────
 
 const MONGO_URI =
-  'mongodb+srv://akashkumarhzb121_db_user:<akash123>@kanbanbackend.uueuwje.mongodb.net/';
+  'mongodb+srv://akashkumarhzb121_db_user:akash123@kanbanbackend.uueuwje.mongodb.net/?appName=kanbanbackend';
 
 const JWT_SECRET = 'akash123';
 
